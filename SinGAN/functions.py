@@ -14,13 +14,14 @@ import os
 import random
 from sklearn.cluster import KMeans
 from copy import deepcopy
+import rasterio
 
 # custom weights initialization called on netG and netD
 
 def read_image(opt):
     img_path = '%s%s' % (opt.input_img,opt.ref_image)
 
-    if image_path.endswith('hgt'):
+    if img_path.endswith('hgt'):
         scale_factor = 1.0 / 8
 
 
