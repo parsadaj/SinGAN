@@ -13,12 +13,46 @@ from SinGAN.imresize import imresize
 import os
 import random
 from sklearn.cluster import KMeans
-
+from copy import deepcopy
 
 # custom weights initialization called on netG and netD
 
 def read_image(opt):
-    x = img.imread('%s%s' % (opt.input_img,opt.ref_image))
+    img_path = '%s%s' % (opt.input_img,opt.ref_image)
+
+    if image_path.endswith('hgt'):
+        scale_factor = 1.0 / 8
+
+
+        with rasterio.open(img_path) as src:
+            # Define the desired smaller shape (for example, half the original size)
+            new_height = int(src.height * scale_factor)
+            new_width = int(src.width * scale_factor)
+        
+            # Read and resample the data to the new shape
+            sample_data = src.read(
+                1,  # First band
+                out_shape=(new_height, new_width),
+                resampling=rasterio.enums.Resampling.bilinear  # Choose the resampling method
+            ).astype(float)[250:350, 200:300]     
+                    
+        # calculating grads
+        grad_x, grad_y = height_to_slopes(sample_data)
+    
+        # recreatinh hright from grad
+        hh = slopes_to_height(grad_x, grad_y)
+        
+        
+        if len(np.unique(hh-sample_data)) == 1:
+            print("Recreating height succesful")
+        else:
+            print("Recreating height failed")
+    
+        # WFC Extraction
+        x = np.concatenate([grad_x[:-1, ..., np.newaxis], grad_y[..., :-1, np.newaxis]], axis=2)
+        
+    else:
+        x = img.imread(img_path)
     return np2torch(x)
 
 def denorm(x):
@@ -353,4 +387,91 @@ def dilate_mask(mask,opt):
     mask = (mask-mask.min())/(mask.max()-mask.min())
     return mask
 
+
+import numpy as np
+from copy import deepcopy
+
+def slopes_to_height(grad_x, grad_y, pad=0, nan_value=-32767):
+    # # Integrate the x-gradient along the x direction
+    # height_map_x = np.cumsum(grad_x, axis=1)
+
+    # # Integrate the y-gradient along the y direction
+    # height_map_y = np.cumsum(grad_y, axis=0)
+
+    # fix, axes = plt.subplots(1, 2, figsize=(8,4))
+    # # im1 = axes[0].imshow(grad_y_np)#, cmap='terrain')
+    # # im2 = axes[1].imshow(grad_y)#, cmap='terrain')
+
+    # im1 = sns.heatmap(height_map_x, ax=axes[0], annot=True)
+    # im2 = sns.heatmap(height_map_y, ax=axes[1], annot=True)
+
+    # height_map_x.shape, height_map_y.shape
+
+    hh = np.full((
+        grad_x.shape[0] + pad,
+        grad_y.shape[1] + pad),
+        fill_value=nan_value
+    )
+        
+        
+    failed = False
+    for y in range(hh.shape[0]-pad):
+        for x in range(hh.shape[1]-pad):
+        
+            if x == 0 and y == 0:
+                hh[y, x] = 0
+                continue
+            
+            if y == 0:
+                hh[y, x] = hh[y, x-1] + grad_x[y, x-1]
+                continue
+                
+            if x == 0:
+                hh[y,x] = hh[y-1, x] + grad_y[y-1, x]
+                continue
+                
+            if y > 0 and x > 0:
+                    
+                hy = hh[y-1, x] + grad_y[y-1, x]
+                hx = hh[y, x-1] + grad_x[y, x-1]
+                
+                if hy == hx:
+                    hh[y, x] = hx
+                else:
+                    failed = True
+                    hh[y, x] = (hx + hy) / 2
+
+            
+            # if x == 0 and y < hh.shape[0]-1:
+            #     hh[y+1, x] = hh[y,x] + grad_y[y,x]
+            #     print(y+1,x)
+            # if x < hh.shape[1] - 1:
+            #     hh[y,x+1] = hh[y,x] + grad_x[y,x]
+            #     print(y,x+1)
+            # if y < hh.shape[1] - 1:
+            #     hh[x,y+1] = hh[x,y] + grad_x[x,y]
+            #     print(x,y+1)
+
+    if pad:
+        for y in range(hh.shape[0]-pad):
+                x = hh.shape[0] - pad
+                hh[y, x] = hh[y, x-1] + grad_x[y, x-1]
+        
+        for x in range(hh.shape[1]-pad):
+                y = hh.shape[0] - pad
+                hh[y, x] = hh[y-1, x] + grad_y[y-1, x]
+
+        #hh[-1, :] = hh[-2,:] + grad_y[-1,:]
+    if failed:
+        print("Conflict in Reconstruction. Averaged the grad values")
+    return hh
+
+def height_to_slopes(heightmap):
+    # # Calculate the gradient in both the x and y directions
+    # grad_y_np, grad_x_np = np.gradient(heightmap)
+
+    grad_x = heightmap[:, 1:] - heightmap[:, :-1]
+    grad_y = heightmap[1:, :] - heightmap[:-1, :]
+    
+    return grad_x, grad_y
 
